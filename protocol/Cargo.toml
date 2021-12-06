@@ -1,0 +1,13 @@
+[package]
+name = "csma-protocol"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+deku = { version = "0.12", default-features = false, features = ["alloc"] }
+cobs = { version = "0.1.4" }
+
+bitvec = { version = "0.22.1", default-features = false, features = ["alloc"] }
+ringbuffer = { version = "0.8", default-features = false }
+
+crc = "2.1"
