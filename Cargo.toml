@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "csma",
+    "protocol",
+    "simulation"
+]
+
+exclude = ["contrib/"]
+
+[profile.release]
+codegen-units = 1
+debug = true
+lto = true
+incremental = false
+opt-level = 3

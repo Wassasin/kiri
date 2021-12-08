@@ -12,13 +12,13 @@ const CHECKSUM: Crc<u16> = Crc::<u16>::new(&CRC_16_IBM_SDLC);
 const CHECKSUM_LEN: usize = 2;
 
 /// How long a message in the frame can be at most, chosen such that `MAX_FRAME_LEN` is at most `2048`.
-const MAX_MESSAGE_LEN: usize = 2030;
+pub const MAX_MESSAGE_LEN: usize = 2030;
 /// How much bytes the header uses up. Do not forget the magic word.
-const MAX_HEADER_LEN: usize = 6;
+pub const MAX_HEADER_LEN: usize = 6;
 /// How much bytes the contents of a frame, without COBS encoding, taking up.
-const MAX_NAKED_LEN: usize = MAX_MESSAGE_LEN + MAX_HEADER_LEN + CHECKSUM_LEN;
+pub const MAX_NAKED_LEN: usize = MAX_MESSAGE_LEN + MAX_HEADER_LEN + CHECKSUM_LEN;
 /// How large a frame can be, theoretically.
-const MAX_FRAME_LEN: usize = cobs_max_encoding_length(MAX_NAKED_LEN) + 1;
+pub const MAX_FRAME_LEN: usize = cobs_max_encoding_length(MAX_NAKED_LEN) + 1;
 
 /// How much bytes cobs will use at most given a specific source length.
 const fn cobs_max_encoding_length(source_len: usize) -> usize {
@@ -32,10 +32,10 @@ pub struct Address(#[deku(bits = 10)] pub u16);
 #[derive(Debug, PartialEq, DekuRead, DekuWrite)]
 #[deku(magic = b"lg")]
 pub struct Header {
-    src: Address,
-    dst: Address,
+    pub src: Address,
+    pub dst: Address,
     #[deku(endian = "big", bits = "11")]
-    len: u16,
+    pub len: u16,
     #[deku(bits = "1")]
     _misc: bool,
 }
@@ -163,25 +163,28 @@ impl Reader {
 }
 
 #[derive(Debug)]
-pub enum WriteResult<'a> {
+pub struct Frame(pub heapless::Vec<u8, { MAX_FRAME_LEN }>);
+
+impl Frame {
+    pub fn as_slice(&self) -> &[u8] {
+        self.0.as_slice()
+    }
+}
+
+#[derive(Debug)]
+pub enum WriteResult {
     /// Tried to write a message that will not fit within a frame.
     TooLong,
     /// Tried to encode an invalid header.
     FrameErrorHeader,
     /// Frame finished, here is it.
-    FrameOK { frame: &'a [u8] },
+    FrameOK(Frame),
 }
 
-pub struct Writer {
-    buf: [u8; 4096],
-}
+pub struct Writer;
 
 impl Writer {
-    pub fn new() -> Self {
-        Self { buf: [0u8; 4096] }
-    }
-
-    pub fn package(&mut self, src: Address, dst: Address, contents: &[u8]) -> WriteResult {
+    pub fn package(src: Address, dst: Address, contents: &[u8]) -> WriteResult {
         let len: u16 = match contents.len().try_into() {
             Ok(len) => len,
             Err(_) => return WriteResult::TooLong,
@@ -194,7 +197,10 @@ impl Writer {
             _misc: false,
         };
 
-        let mut cobs = cobs::CobsEncoder::new(&mut self.buf);
+        let mut buf = heapless::Vec::<u8, { MAX_FRAME_LEN }>::new();
+        buf.resize_default(MAX_FRAME_LEN).unwrap();
+
+        let mut cobs = cobs::CobsEncoder::new(buf.as_mut());
         let mut checksum_digest = CHECKSUM.digest();
 
         match header.to_bytes() {
@@ -222,12 +228,11 @@ impl Writer {
 
         match cobs.finalize() {
             Ok(len) => {
-                if len < self.buf.len() {
+                if len < buf.len() {
                     // Add COBS sentinel marker.
-                    self.buf[len] = COBS_MARKER;
-                    WriteResult::FrameOK {
-                        frame: &self.buf[0..len + 1],
-                    }
+                    buf[len] = COBS_MARKER;
+                    buf.resize_default(len + 1).unwrap();
+                    WriteResult::FrameOK(Frame(buf))
                 } else {
                     WriteResult::TooLong
                 }
@@ -247,14 +252,13 @@ mod tests {
     const ADDR_B: Address = Address(169);
 
     fn fill_frame(result: &mut [u8]) -> &mut [u8] {
-        let mut writer = Writer::new();
-        let frame = match writer.package(ADDR_A, ADDR_B, MSG) {
-            WriteResult::FrameOK { frame } => frame,
+        let frame = match Writer::package(ADDR_A, ADDR_B, MSG) {
+            WriteResult::FrameOK(frame) => frame,
             e => panic!("Invalid result {:?}", e),
         };
 
-        let result = &mut result[0..frame.len()];
-        result.copy_from_slice(frame);
+        let result = &mut result[0..frame.as_slice().len()];
+        result.copy_from_slice(frame.as_slice());
         result
     }
 

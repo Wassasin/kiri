@@ -1,0 +1,16 @@
+[package]
+name = "csma-simulation"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pretty_env_logger = "0.4"
+log = "0.4"
+
+nb = "1.0"
+serde = "1.0"
+serde_derive = "1.0"
+serde_json = "1.0"
+
+csma-protocol = { path = "../protocol" }
+csma-csma = { path = "../csma" }
