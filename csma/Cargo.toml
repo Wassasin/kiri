@@ -5,9 +5,7 @@ edition = "2021"
 
 [dependencies]
 nb = "1.0"
-embedded-time = "0.12"
 rand = "0.8"
-
 heapless = "0.7"
 
 csma-protocol = { path = "../protocol" }

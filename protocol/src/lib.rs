@@ -50,6 +50,26 @@ pub struct FrameRef<'a> {
     pub contents: &'a [u8],
 }
 
+/// Owned variant of a frame.
+///
+/// **TODO**: remove this type as it should be unnecessary.
+pub struct FrameOwned {
+    pub header: Header,
+    pub contents: heapless::Vec<u8, MAX_MESSAGE_LEN>,
+}
+
+impl<'a> TryInto<FrameOwned> for FrameRef<'a> {
+    type Error = ();
+
+    fn try_into(self) -> Result<FrameOwned, Self::Error> {
+        let contents = heapless::Vec::from_slice(self.contents)?;
+        Ok(FrameOwned {
+            header: self.header,
+            contents,
+        })
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum ReadResult<'a> {
     /// The reader has not yet consumed enough bytes.
@@ -84,6 +104,8 @@ impl<'a> ReadResult<'a> {
 }
 
 /// A reader for the protocol.
+///
+/// We use a separate `ptr` field contrary to a `heapless::Vec` due to lifetimes.
 pub struct Reader {
     buf: [u8; MAX_FRAME_LEN],
     ptr: usize,
@@ -97,16 +119,19 @@ impl Reader {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.ptr = 0;
+    }
+
     /// Feed a new byte to the reader, and it might result in a correct frame.
+    ///
+    /// Do not forget to clear the reader after an error.
     pub fn feed(&mut self, byte: u8) -> ReadResult {
         let old_ptr = self.ptr;
         let new_ptr = (self.ptr + 1).min(self.buf.len());
         let overflown = old_ptr == new_ptr;
 
         if overflown {
-            // Clear the frame.
-            self.ptr = 0;
-
             return ReadResult::Overflow;
         }
 
@@ -115,6 +140,9 @@ impl Reader {
 
         // COBS marker detected
         if byte == COBS_MARKER {
+            // Clear frame so that the reader is usable again at error or when FrameRef is dropped.
+            self.clear();
+
             let msg_buf = &mut self.buf[0..old_ptr];
             let msg_buf = match cobs::decode_in_place(msg_buf) {
                 Ok(len) => &mut msg_buf[0..len],
@@ -147,9 +175,6 @@ impl Reader {
             if body_buf.len() != header.len as usize {
                 return ReadResult::FrameErrorSize;
             }
-
-            // Clear frame so that the reader is usable again after FrameRef is dropped.
-            self.ptr = 0;
 
             // Reader can not be fed as long as FrameRef is in use.
             ReadResult::FrameOK(FrameRef {
@@ -304,7 +329,7 @@ mod tests {
 
     #[test]
     fn writer_reader_noise() {
-        let frame = &mut [0u8; 4096];
+        let frame = &mut [0u8; MAX_FRAME_LEN];
         let len = fill_frame(frame).len();
 
         for i in 0..(len - 1) {

@@ -2,8 +2,8 @@ use log;
 use serde_derive::{Deserialize, Serialize};
 use std::{collections::HashSet, rc::Rc};
 
-use clock::FakeClock;
-use csma_csma::{FrameInProgress, GreedyStrategy};
+use clock::{FakeClock, FakeDuration};
+use csma_csma::{Clock, GreedyFrameInProgress, GreedyStrategy};
 use csma_protocol::{Address, Frame, FrameRef, Writer};
 use simulation::{SerialBus, SerialTransceiver};
 
@@ -12,8 +12,9 @@ mod simulation;
 
 pub struct BusConf;
 
-impl csma_csma::Config for BusConf {
-    const BUS_FREQUENCY_HZ: u64 = 115200;
+impl csma_csma::Config<FakeClock> for BusConf {
+    const BUS_BIT_DURATION: <FakeClock as Clock>::Duration = FakeDuration(1);
+    const BUS_MAX_IDLE_DURATION: <FakeClock as Clock>::Duration = FakeDuration(10);
 }
 
 pub struct Mailbox {
@@ -86,12 +87,12 @@ impl Mailbox {
 
 pub struct Party {
     address: Address,
-    strategy: GreedyStrategy<SerialTransceiver, BusConf>,
-    current_frame: Option<FrameInProgress>,
+    strategy: GreedyStrategy<SerialTransceiver>,
+    current_frame: Option<GreedyFrameInProgress>,
 }
 
 impl Party {
-    pub fn new(address: Address, strategy: GreedyStrategy<SerialTransceiver, BusConf>) -> Self {
+    pub fn new(address: Address, strategy: GreedyStrategy<SerialTransceiver>) -> Self {
         Self {
             address,
             strategy,
@@ -105,7 +106,7 @@ impl Party {
         if self.current_frame.is_none() {
             self.current_frame = mailbox
                 .fetch(self.address)
-                .map(|frame| FrameInProgress::new(frame));
+                .map(|frame| GreedyFrameInProgress::new(frame));
         }
 
         if let Some(frame) = self.current_frame.as_mut() {
@@ -166,7 +167,7 @@ fn main() {
     for i in 0..party_count {
         let address = Address(i as u16);
         let transceiver = SerialTransceiver::new(bus.clone());
-        let strategy = GreedyStrategy::<_, BusConf>::new(transceiver);
+        let strategy = GreedyStrategy::<_>::new(transceiver);
         parties.push(Party::new(address, strategy));
     }
 
