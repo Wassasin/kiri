@@ -12,6 +12,7 @@ pub struct FakeInstant(pub u64);
 #[derive(PartialEq, PartialOrd, Debug, Clone, Copy)]
 pub struct FakeDuration(pub u64);
 
+#[derive(Debug)]
 pub struct FakeClock {
     now: AtomicU64,
 }

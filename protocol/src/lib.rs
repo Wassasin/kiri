@@ -3,6 +3,7 @@
 extern crate alloc;
 
 use alloc::{format, vec::Vec};
+use core::fmt::Debug;
 
 use crc::{Crc, CRC_16_IBM_SDLC};
 use deku::prelude::*;
@@ -29,7 +30,7 @@ const fn cobs_max_encoding_length(source_len: usize) -> usize {
 #[deku(endian = "big")]
 pub struct Address(#[deku(bits = 10)] pub u16);
 
-#[derive(Debug, PartialEq, DekuRead, DekuWrite)]
+#[derive(Debug, PartialEq, DekuRead, DekuWrite, Clone)]
 #[deku(magic = b"lg")]
 pub struct Header {
     pub src: Address,
@@ -67,6 +68,15 @@ impl<'a> TryInto<FrameOwned> for FrameRef<'a> {
             header: self.header,
             contents,
         })
+    }
+}
+
+impl<'a> Into<FrameRef<'a>> for &'a FrameOwned {
+    fn into(self) -> FrameRef<'a> {
+        FrameRef {
+            header: self.header.clone(),
+            contents: self.contents.as_slice(),
+        }
     }
 }
 
@@ -184,6 +194,12 @@ impl Reader {
         } else {
             ReadResult::NotYet
         }
+    }
+}
+
+impl Debug for Reader {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.buf[0..self.ptr].fmt(f)
     }
 }
 

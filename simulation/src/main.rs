@@ -1,20 +1,22 @@
 use log;
+use rand::prelude::ThreadRng;
 use serde_derive::{Deserialize, Serialize};
 use std::{collections::HashSet, rc::Rc};
 
 use clock::{FakeClock, FakeDuration};
-use csma_csma::{Clock, GreedyFrameInProgress, GreedyStrategy};
+use csma_csma::{Clock, CsmaFrameInProgress, CsmaStrategy, SendReceiveResult};
 use csma_protocol::{Address, Frame, FrameRef, Writer};
 use simulation::{SerialBus, SerialTransceiver};
 
 mod clock;
 mod simulation;
 
+#[derive(Debug)]
 pub struct BusConf;
 
 impl csma_csma::Config<FakeClock> for BusConf {
-    const BUS_BIT_DURATION: <FakeClock as Clock>::Duration = FakeDuration(1);
-    const BUS_MAX_IDLE_DURATION: <FakeClock as Clock>::Duration = FakeDuration(10);
+    const BUS_MIN_IDLE_DURATION: <FakeClock as Clock>::Duration = FakeDuration(1);
+    const BUS_MAX_IDLE_DURATION: <FakeClock as Clock>::Duration = FakeDuration(32);
 }
 
 pub struct Mailbox {
@@ -32,15 +34,12 @@ impl Mailbox {
         }
     }
 
+    /// Fetch a new message to send.
     pub fn fetch(&mut self, src: Address) -> Option<Frame> {
         // TODO maybe wait for messages to be generated.
         let addr = src.0 as usize;
         let parties = self.send_progress.len();
         let progress = &mut self.send_progress[addr];
-
-        if addr != 0 {
-            return None;
-        }
 
         if *progress < self.messages_per_party {
             let mut dst = *progress % (parties - 1);
@@ -73,7 +72,14 @@ impl Mailbox {
         let message = Message::from_bytes(frame.contents).unwrap();
         assert_eq!(message.src, frame.header.src.0);
         assert_eq!(message.dst, frame.header.dst.0);
-        self.receive_progress[message.dst as usize].insert(message.identifier);
+        self.receive_progress[message.src as usize].insert(message.identifier);
+
+        log::info!(
+            "Received {} -> {}: {}",
+            message.src,
+            message.dst,
+            message.identifier
+        );
     }
 
     pub fn report(&self) {
@@ -82,44 +88,58 @@ impl Mailbox {
             self.send_progress,
             Vec::from_iter(self.receive_progress.iter().map(|set| set.len()))
         );
+        log::info!(
+            "{}% received",
+            self.receive_progress
+                .iter()
+                .map(|set| set.len())
+                .sum::<usize>() as f64
+                / self.messages_per_party as f64
+                / self.receive_progress.len() as f64
+                * 100.
+        );
     }
 }
 
-pub struct Party {
+pub struct Party<'a> {
     address: Address,
-    strategy: GreedyStrategy<SerialTransceiver>,
-    current_frame: Option<GreedyFrameInProgress>,
+    strategy: CsmaStrategy<'a, SerialTransceiver, FakeClock, ThreadRng, BusConf>,
+    current_frame: Option<CsmaFrameInProgress>,
 }
 
-impl Party {
-    pub fn new(address: Address, strategy: GreedyStrategy<SerialTransceiver>) -> Self {
+impl<'a> Party<'a> {
+    pub fn new(
+        address: Address,
+        strategy: CsmaStrategy<'a, SerialTransceiver, FakeClock, ThreadRng, BusConf>,
+    ) -> Self {
         Self {
             address,
             strategy,
             current_frame: None,
         }
     }
-}
 
-impl Party {
-    pub fn simulate(&mut self, clock: &FakeClock, mailbox: &mut Mailbox) {
+    pub fn simulate(&mut self, mailbox: &mut Mailbox) {
         if self.current_frame.is_none() {
             self.current_frame = mailbox
                 .fetch(self.address)
-                .map(|frame| GreedyFrameInProgress::new(frame));
+                .map(|frame| CsmaFrameInProgress::new(frame));
         }
 
         if let Some(frame) = self.current_frame.as_mut() {
-            log::trace!("{:?}", frame);
-            match self.strategy.send(frame) {
-                Ok(()) => {
-                    log::trace!("Clearing frame for {:?}", self.address);
-                    self.current_frame = None
+            log::trace!("{:?} (S/R) {:?} {:?}", self.address, self.strategy, frame);
+            match self.strategy.send_or_receive(frame) {
+                Ok(SendReceiveResult::Received(incoming_frame)) => {
+                    if incoming_frame.header.dst == self.address {
+                        mailbox.deliver((&incoming_frame).into())
+                    }
                 }
+                Ok(SendReceiveResult::SendComplete) => self.current_frame = None,
                 Err(nb::Error::WouldBlock) => (),
                 Err(nb::Error::Other(e)) => panic!("Error: {:?}", e),
             }
         } else {
+            log::trace!("{:?} (R) {:?}", self.address, self.strategy);
             match self.strategy.receive() {
                 Ok(frame) => {
                     if frame.header.dst == self.address {
@@ -154,10 +174,10 @@ fn main() {
     pretty_env_logger::init();
 
     let clock = Rc::new(FakeClock::new());
-    let bus = Rc::new(SerialBus::new(clock.clone()));
+    let bus = Rc::new(SerialBus::new());
 
-    let message_count = 100;
-    let party_count = 5;
+    let message_count = 1000;
+    let party_count = 10;
 
     let mut mailbox = Mailbox::new(message_count, party_count);
 
@@ -167,23 +187,22 @@ fn main() {
     for i in 0..party_count {
         let address = Address(i as u16);
         let transceiver = SerialTransceiver::new(bus.clone());
-        let strategy = GreedyStrategy::<_>::new(transceiver);
+        let strategy =
+            CsmaStrategy::<_, _, _, BusConf>::new(transceiver, &clock, rand::thread_rng());
         parties.push(Party::new(address, strategy));
     }
 
-    let len = 10000;
+    let len = 20000000;
 
     for _i in 0..len {
-        bus.clear();
+        bus.iterate();
 
         for p in parties.iter_mut() {
-            p.simulate(clock.as_ref(), &mut mailbox);
+            p.simulate(&mut mailbox);
         }
 
-        if let Some(b) = bus.read() {
-            log::trace!("{:?} {:?}", clock.now(), b);
-        }
-
+        let states = Vec::from_iter(parties.iter().map(|p| &p.strategy.state));
+        log::trace!("{:?} {:?} {:?}", clock.now(), bus.read(), states);
         clock.increase(1);
     }
 

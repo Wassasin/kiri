@@ -1,6 +1,6 @@
 #![no_std]
 
-use core::{marker::PhantomData, ops::Add};
+use core::{fmt::Debug, marker::PhantomData, ops::Add};
 
 use csma_protocol::{Frame, FrameOwned, FrameRef, ReadResult, Reader};
 use rand::{
@@ -30,14 +30,19 @@ pub trait Transceiver {
 }
 
 pub trait Clock {
-    type Instant: PartialEq + PartialOrd + Add<Self::Duration, Output = Self::Instant>;
+    type Instant: PartialEq
+        + PartialOrd
+        + Add<Self::Duration, Output = Self::Instant>
+        + Debug
+        + Clone
+        + Copy;
     type Duration: PartialEq + SampleUniform;
 
     fn now(&self) -> Self::Instant;
 }
 
 pub trait Config<C: Clock> {
-    const BUS_BIT_DURATION: C::Duration;
+    const BUS_MIN_IDLE_DURATION: C::Duration;
     const BUS_MAX_IDLE_DURATION: C::Duration;
 }
 
@@ -109,7 +114,8 @@ impl<T: Transceiver> GreedyStrategy<T> {
     }
 }
 
-enum CsmaStrategyState<C: Clock> {
+#[derive(Debug)]
+pub enum CsmaStrategyState<C: Clock> {
     /// The bus is not idle, and before deciding to act we first must wait for a new frame.
     WaitForBusIdle,
     /// Bus is now idle, but needs to wait a bit before we can start chattering.
@@ -126,15 +132,17 @@ enum CsmaStrategyState<C: Clock> {
 }
 
 /// Carrier Sense Multiple Access strategy implementation.
-pub struct CsmaStrategy<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> {
+#[derive(Debug)]
+pub struct CsmaStrategy<'a, T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> {
     transceiver: T,
-    clock: C,
+    clock: &'a C,
     rng: R,
     reader: Reader,
-    state: CsmaStrategyState<C>,
+    pub state: CsmaStrategyState<C>,
     _conf: PhantomData<CONF>,
 }
 
+#[derive(Debug)]
 pub struct CsmaFrameInProgress {
     frame: Frame,
     send_ptr: usize,
@@ -142,6 +150,14 @@ pub struct CsmaFrameInProgress {
 }
 
 impl CsmaFrameInProgress {
+    pub fn new(frame: Frame) -> Self {
+        Self {
+            frame,
+            send_ptr: 0,
+            receive_ptr: 0,
+        }
+    }
+
     pub fn reset(&mut self) {
         self.send_ptr = 0;
         self.receive_ptr = 0;
@@ -171,8 +187,8 @@ pub enum SendReceiveResult {
     Received(FrameOwned),
 }
 
-impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R, CONF> {
-    pub fn new(transceiver: T, clock: C, rng: R) -> Self {
+impl<'a, T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<'a, T, C, R, CONF> {
+    pub fn new(transceiver: T, clock: &'a C, rng: R) -> Self {
         Self {
             transceiver,
             clock,
@@ -190,7 +206,7 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
             WaitForBusIdle => {
                 if self.transceiver.bus_is_idle() {
                     let distribution =
-                        Uniform::new(CONF::BUS_BIT_DURATION, CONF::BUS_MAX_IDLE_DURATION);
+                        Uniform::new(CONF::BUS_MIN_IDLE_DURATION, CONF::BUS_MAX_IDLE_DURATION);
                     let idle_duration = distribution.sample(&mut self.rng);
                     let ready_at = self.clock.now() + idle_duration;
                     self.state = BusIdleCooldown { ready_at };
@@ -204,8 +220,12 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
                 }
             }
             StartSend => {
-                self.reader.clear();
-                self.state = Sending;
+                if !self.transceiver.bus_is_idle() {
+                    self.state = WaitForBusIdle;
+                } else {
+                    self.reader.clear();
+                    self.state = Sending;
+                }
             }
             Sending => {
                 let b = match frame.peek_for_send() {
@@ -258,16 +278,13 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
         // Handle incoming bytes during our sending process.
         if let Ok(b) = self.transceiver.read() {
             match &self.state {
-                StartSend => {
-                    // As long as we have bytes in the buffer when wanting to start to send, throw them away
-                    // and reset the incoming frame.
-                    self.reader.clear();
-                    return nb::Result::Err(nb::Error::WouldBlock);
-                }
                 Sending | ConfirmingSendWithoutErrors => {
                     // Frame must correspond with the frame we are trying to send.
                     match frame.feed_as_check(b) {
-                        Ok(true) => return Ok(SendReceiveResult::SendComplete),
+                        Ok(true) => {
+                            self.state = WaitForBusIdle;
+                            return Ok(SendReceiveResult::SendComplete);
+                        }
                         Ok(false) => (), // Continue with sending.
                         Err(_) => {
                             // Mismatch between sending and loopback frames.
@@ -278,6 +295,9 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
                             // Forget the current incoming frame.
                             self.reader.clear();
 
+                            // Impossible to lead to a frame.
+                            let _ = self.reader.feed(b);
+
                             // Wait for the error to clear and the bus to be reset again.
                             self.state = WaitForBusIdle;
                             return nb::Result::Err(nb::Error::WouldBlock);
@@ -285,6 +305,8 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
                     }
                 }
                 _ => {
+                    self.state = WaitForBusIdle;
+
                     // The byte that we received is part of a valid frame.
                     if let ReadResult::FrameOK(incoming_frame) = self.reader.feed(b) {
                         // The frame that was finished should be the same as the one we are trying to send.
@@ -303,6 +325,18 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
     }
 
     pub fn receive(&mut self) -> nb::Result<FrameRef<'_>, T::Error> {
+        // Handle if there is an error on the bus.
+        if self.transceiver.bus_has_error() {
+            // Throw away any waiting bytes.
+            let _ = self.transceiver.read();
+
+            // Forget the current incoming frame.
+            self.reader.clear();
+
+            // Wait for the error to clear and the bus to be reset again.
+            return nb::Result::Err(nb::Error::WouldBlock);
+        }
+
         let b = self.transceiver.read()?;
 
         match self.reader.feed(b) {

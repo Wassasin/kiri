@@ -1,8 +1,6 @@
-use std::{cell::Cell, rc::Rc};
+use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
 use csma_csma::Transceiver;
-
-use crate::clock::FakeClock;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Fragment {
@@ -10,24 +8,29 @@ pub struct Fragment {
     error: bool,
 }
 
-pub struct SerialBus {
-    fragment: Cell<Option<Fragment>>,
-    clock: Rc<FakeClock>,
+#[derive(Debug, Clone, Copy)]
+pub struct SerialBusState {
+    current: Option<Fragment>,
+    next: Option<Fragment>,
 }
 
+pub struct SerialBus(RefCell<SerialBusState>);
+
 impl SerialBus {
-    pub fn new(clock: Rc<FakeClock>) -> Self {
-        Self {
-            fragment: Cell::new(None),
-            clock,
-        }
+    pub fn new() -> Self {
+        Self(RefCell::new(SerialBusState {
+            current: None,
+            next: None,
+        }))
     }
 
     pub fn write(&self, mut byte: u8) {
         // If two transceiver write at the same time, the message overlaps?
         let mut error = false;
 
-        match self.fragment.get() {
+        let mut state = self.0.borrow_mut();
+
+        match state.next {
             Some(ref old_fragment) => {
                 byte = byte | old_fragment.contents;
                 error = true;
@@ -40,26 +43,37 @@ impl SerialBus {
             error,
         };
 
-        self.fragment.replace(Some(fragment));
+        state.next = Some(fragment);
     }
 
     pub fn is_idle(&self) -> bool {
-        self.fragment.get().is_none()
+        let state = self.0.borrow();
+        state.current.is_none() && state.next.is_none()
     }
 
     pub fn is_error(&self) -> bool {
-        match self.fragment.get() {
+        let state = self.0.borrow();
+        match state.current {
             Some(fragment) => fragment.error,
             None => false,
         }
     }
 
     pub fn read(&self) -> Option<u8> {
-        self.fragment.get().map(|f| f.contents)
+        let state = self.0.borrow();
+        if let Some(current) = state.current {
+            if !current.error {
+                return Some(current.contents);
+            }
+        }
+        None
     }
 
-    pub fn clear(&self) {
-        self.fragment.replace(None);
+    pub fn iterate(&self) {
+        let mut state = self.0.borrow_mut();
+
+        state.current = state.next;
+        state.next = None;
     }
 }
 
@@ -94,5 +108,11 @@ impl Transceiver for SerialTransceiver {
             Some(b) => Ok(b),
             None => nb::Result::Err(nb::Error::WouldBlock),
         }
+    }
+}
+
+impl Debug for SerialTransceiver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SerialTransceiver").finish()
     }
 }
