@@ -1,5 +1,5 @@
 [package]
-name = "csma-simulation"
+name = "kiri-simulation"
 version = "0.1.0"
 edition = "2021"
 
@@ -14,5 +14,5 @@ serde_json = "1.0"
 
 rand = "0.8"
 
-csma-protocol = { path = "../protocol" }
-csma-csma = { path = "../csma" }
+kiri-protocol = { path = "../protocol" }
+kiri-csma = { path = "../csma" }

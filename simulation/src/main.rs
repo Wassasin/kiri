@@ -4,8 +4,8 @@ use serde_derive::{Deserialize, Serialize};
 use std::{collections::HashSet, rc::Rc};
 
 use clock::{FakeClock, FakeDuration};
-use csma_csma::{Clock, CsmaFrameInProgress, CsmaStrategy, SendReceiveResult};
-use csma_protocol::{Address, Frame, FrameRef, Writer};
+use kiri_csma::{Clock, CsmaFrameInProgress, CsmaStrategy, SendReceiveResult};
+use kiri_protocol::{Address, Frame, FrameRef, Writer};
 use simulation::{SerialBus, SerialTransceiver};
 
 mod clock;
@@ -14,7 +14,7 @@ mod simulation;
 #[derive(Debug)]
 pub struct BusConf;
 
-impl csma_csma::Config<FakeClock> for BusConf {
+impl kiri_csma::Config<FakeClock> for BusConf {
     const BUS_MIN_IDLE_DURATION: <FakeClock as Clock>::Duration = FakeDuration(1);
     const BUS_MAX_IDLE_DURATION: <FakeClock as Clock>::Duration = FakeDuration(32);
 }
@@ -54,7 +54,7 @@ impl Mailbox {
             };
 
             let frame = match Writer::package(src, dst, &message.to_bytes()) {
-                csma_protocol::WriteResult::FrameOK(frame) => frame,
+                kiri_protocol::WriteResult::FrameOK(frame) => frame,
                 _ => panic!("Writer failed to pack reasonable message"),
             };
 

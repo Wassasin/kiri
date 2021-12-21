@@ -2,7 +2,7 @@
 
 use core::{fmt::Debug, marker::PhantomData, ops::Add};
 
-use csma_protocol::{Frame, FrameOwned, FrameRef, ReadResult, Reader};
+use kiri_protocol::{Frame, FrameOwned, FrameRef, ReadResult, Reader};
 use rand::{
     distributions::{uniform::SampleUniform, Uniform},
     prelude::Distribution,

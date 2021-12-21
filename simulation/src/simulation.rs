@@ -1,6 +1,6 @@
 use std::{cell::RefCell, fmt::Debug, rc::Rc};
 
-use csma_csma::Transceiver;
+use kiri_csma::Transceiver;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Fragment {

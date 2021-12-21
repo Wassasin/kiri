@@ -3,7 +3,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use csma_csma::Clock;
+use kiri_csma::Clock;
 use rand::distributions::uniform::{SampleUniform, UniformInt, UniformSampler};
 
 #[derive(PartialEq, PartialOrd, Debug, Clone, Copy)]
