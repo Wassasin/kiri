@@ -68,6 +68,7 @@ impl Mailbox {
         }
     }
 
+    /// Try to deliver a message contained in a frame.
     pub fn deliver(&mut self, frame: FrameRef) {
         let message = Message::from_bytes(frame.contents).unwrap();
         assert_eq!(message.src, frame.header.src.0);
@@ -82,6 +83,7 @@ impl Mailbox {
         );
     }
 
+    /// Log our current progress to the `log` crate.
     pub fn report(&self) {
         log::info!(
             "{:?} {:?}",
@@ -98,6 +100,13 @@ impl Mailbox {
                 / self.receive_progress.len() as f64
                 * 100.
         );
+    }
+
+    /// All messages have been sent successfully, as far as the senders are concerned.
+    pub fn all_sent(&self) -> bool {
+        self.send_progress
+            .iter()
+            .all(|progress| *progress == self.messages_per_party)
     }
 }
 
@@ -176,8 +185,9 @@ fn main() {
     let clock = Rc::new(FakeClock::new());
     let bus = Rc::new(SerialBus::new());
 
-    let message_count = 1000;
+    let message_count = 100;
     let party_count = 10;
+    let post_done_length = 32;
 
     let mut mailbox = Mailbox::new(message_count, party_count);
 
@@ -192,9 +202,8 @@ fn main() {
         parties.push(Party::new(address, strategy));
     }
 
-    let len = 20000000;
-
-    for _i in 0..len {
+    let mut post_done_count = 0;
+    while !mailbox.all_sent() {
         bus.iterate();
 
         for p in parties.iter_mut() {
@@ -204,7 +213,17 @@ fn main() {
         let states = Vec::from_iter(parties.iter().map(|p| &p.strategy.state));
         log::trace!("{:?} {:?} {:?}", clock.now(), bus.read(), states);
         clock.increase(1);
+
+        if mailbox.all_sent() {
+            if post_done_count >= post_done_length {
+                break;
+            } else {
+                post_done_count += 1;
+            }
+        }
     }
+
+    log::info!("Done in {:?}", clock.now());
 
     mailbox.report();
 }
