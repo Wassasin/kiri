@@ -37,7 +37,7 @@ impl Mailbox {
     /// Fetch a new message to send.
     pub fn fetch(&mut self, src: Address) -> Option<Frame> {
         // TODO maybe wait for messages to be generated.
-        let addr = src.0 as usize;
+        let addr = src.to_primitive() as usize;
         let parties = self.send_progress.len();
         let progress = &mut self.send_progress[addr];
 
@@ -46,10 +46,10 @@ impl Mailbox {
             if dst >= addr {
                 dst += 1;
             }
-            let dst = Address(dst as u16);
+            let dst = Address::new(dst as u16).unwrap();
             let message = Message {
-                src: src.0,
-                dst: dst.0,
+                src: src.to_primitive(),
+                dst: dst.to_primitive(),
                 identifier: *progress,
             };
 
@@ -58,7 +58,12 @@ impl Mailbox {
                 _ => panic!("Writer failed to pack reasonable message"),
             };
 
-            log::info!("Sending {} -> {}: {}", src.0, dst.0, progress);
+            log::info!(
+                "Sending {} -> {}: {}",
+                src.to_primitive(),
+                dst.to_primitive(),
+                progress
+            );
 
             *progress += 1;
 
@@ -71,8 +76,8 @@ impl Mailbox {
     /// Try to deliver a message contained in a frame.
     pub fn deliver(&mut self, frame: FrameRef) {
         let message = Message::from_bytes(frame.contents).unwrap();
-        assert_eq!(message.src, frame.header.src.0);
-        assert_eq!(message.dst, frame.header.dst.0);
+        assert_eq!(message.src, frame.header.address_src.to_primitive());
+        assert_eq!(message.dst, frame.header.address_dst.to_primitive());
         self.receive_progress[message.src as usize].insert(message.identifier);
 
         log::info!(
@@ -139,7 +144,7 @@ impl<'a> Party<'a> {
             log::trace!("{:?} (S/R) {:?} {:?}", self.address, self.strategy, frame);
             match self.strategy.send_or_receive(frame) {
                 Ok(SendReceiveResult::Received(incoming_frame)) => {
-                    if incoming_frame.header.dst == self.address {
+                    if incoming_frame.header.address_dst == self.address {
                         mailbox.deliver((&incoming_frame).into())
                     }
                 }
@@ -151,7 +156,7 @@ impl<'a> Party<'a> {
             log::trace!("{:?} (R) {:?}", self.address, self.strategy);
             match self.strategy.receive() {
                 Ok(frame) => {
-                    if frame.header.dst == self.address {
+                    if frame.header.address_dst == self.address {
                         mailbox.deliver(frame)
                     }
                 }
@@ -195,7 +200,7 @@ fn main() {
     parties.reserve(party_count);
 
     for i in 0..party_count {
-        let address = Address(i as u16);
+        let address = Address::new(i as u16).unwrap();
         let transceiver = SerialTransceiver::new(bus.clone());
         let strategy =
             CsmaStrategy::<_, _, _, BusConf>::new(transceiver, &clock, rand::thread_rng());
@@ -210,8 +215,6 @@ fn main() {
             p.simulate(&mut mailbox);
         }
 
-        let states = Vec::from_iter(parties.iter().map(|p| &p.strategy.state));
-        log::trace!("{:?} {:?} {:?}", clock.now(), bus.read(), states);
         clock.increase(1);
 
         if mailbox.all_sent() {

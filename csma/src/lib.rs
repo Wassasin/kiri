@@ -54,7 +54,7 @@ pub struct GreedyFrameInProgress {
 
 impl GreedyFrameInProgress {
     pub fn first(&self) -> Option<u8> {
-        return self.frame.0.get(self.ptr).map(|b| *b);
+        return self.frame.0.get(self.ptr).copied();
     }
 
     pub fn pop_first(&mut self) {
@@ -108,8 +108,8 @@ impl<T: Transceiver> GreedyStrategy<T> {
     pub fn receive(&mut self) -> nb::Result<FrameRef<'_>, T::Error> {
         let b = self.transceiver.read()?;
         match self.reader.feed(b) {
-            ReadResult::FrameOK(fr) => return Ok(fr),
-            _ => return nb::Result::Err(nb::Error::WouldBlock),
+            ReadResult::FrameOK(fr) => Ok(fr),
+            _ => nb::Result::Err(nb::Error::WouldBlock),
         }
     }
 }
@@ -138,7 +138,7 @@ pub struct CsmaStrategy<'a, T: Transceiver, C: Clock, R: RngCore, CONF: Config<C
     clock: &'a C,
     rng: R,
     reader: Reader,
-    pub state: CsmaStrategyState<C>,
+    state: CsmaStrategyState<C>,
     _conf: PhantomData<CONF>,
 }
 
@@ -164,7 +164,7 @@ impl CsmaFrameInProgress {
     }
 
     pub fn peek_for_send(&mut self) -> Option<u8> {
-        self.frame.as_slice().get(self.send_ptr).map(|b| *b)
+        self.frame.as_slice().get(self.send_ptr).copied()
     }
 
     pub fn notify_send(&mut self) {
