@@ -94,19 +94,19 @@ impl Transceiver for SerialTransceiver {
         self.bus.is_idle()
     }
 
-    fn bus_has_error(&self) -> bool {
-        self.bus.is_error()
-    }
-
-    fn write(&self, byte: u8) -> nb::Result<(), Self::Error> {
+    fn write(&mut self, byte: u8) -> nb::Result<(), Self::Error> {
         self.bus.write(byte);
         Ok(())
     }
 
-    fn read(&self) -> nb::Result<u8, Self::Error> {
-        match self.bus.read() {
-            Some(b) => Ok(b),
-            None => nb::Result::Err(nb::Error::WouldBlock),
+    fn read(&mut self) -> nb::Result<u8, kiri_csma::ReadError<Self::Error>> {
+        if self.bus.is_error() {
+            nb::Result::Err(nb::Error::Other(kiri_csma::ReadError::FrameError))
+        } else {
+            match self.bus.read() {
+                Some(b) => Ok(b),
+                None => nb::Result::Err(nb::Error::WouldBlock),
+            }
         }
     }
 }

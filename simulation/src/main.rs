@@ -54,7 +54,7 @@ impl Mailbox {
             };
 
             let frame = match Writer::package(src, dst, &message.to_bytes()) {
-                kiri_protocol::WriteResult::FrameOK(frame) => frame,
+                Ok(frame) => frame,
                 _ => panic!("Writer failed to pack reasonable message"),
             };
 

@@ -42,10 +42,20 @@ pub struct Address {
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct AddressTooLargeError;
 
+const ADDRESS_UNICAST: u16 = 0x3FF;
+
 impl Address {
     pub fn new(addr: u16) -> Result<Self, AddressTooLargeError> {
         let inner = convert_primitive(addr).map_err(|_| AddressTooLargeError)?;
         Ok(Self { inner })
+    }
+
+    pub fn unicast() -> Address {
+        Self::new(ADDRESS_UNICAST).unwrap()
+    }
+
+    pub fn is_unicast(&self) -> bool {
+        self == &Self::unicast()
     }
 
     pub fn to_primitive(&self) -> u16 {
@@ -255,19 +265,19 @@ impl Frame {
 
 #[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
-pub enum WriteResult {
+pub enum WriteError {
     /// Tried to write a message that will not fit within a frame.
     TooLong,
     /// Tried to encode an invalid header.
     FrameErrorHeader,
-    /// Frame finished, here is it.
-    FrameOK(Frame),
 }
 
 pub struct Writer;
 
 impl Writer {
-    pub fn package(src: Address, dst: Address, contents: &[u8]) -> WriteResult {
+    pub fn package(src: Address, dst: Address, contents: &[u8]) -> Result<Frame, WriteError> {
+        use WriteError::*;
+
         let len = match contents
             .len()
             .try_into()
@@ -275,7 +285,7 @@ impl Writer {
             .and_then(convert_primitive)
         {
             Ok(len) => len,
-            Err(_) => return WriteResult::TooLong,
+            Err(_) => return Err(TooLong),
         };
 
         let header = Header {
@@ -293,7 +303,7 @@ impl Writer {
 
         let header_buf = match header.pack() {
             Ok(header_buf) => header_buf,
-            Err(_) => return WriteResult::FrameErrorHeader,
+            Err(_) => return Err(FrameErrorHeader),
         };
 
         checksum_digest.update(MAGIC_WORD.as_slice());
@@ -305,13 +315,13 @@ impl Writer {
         checksum_digest.update(contents);
         match cobs.push(contents) {
             Ok(()) => (),
-            Err(_) => return WriteResult::TooLong, // Can definitely happen.
+            Err(_) => return Err(TooLong), // Can definitely happen.
         }
 
         let crc = checksum_digest.finalize();
         match cobs.push(&crc.to_be_bytes()) {
             Ok(()) => (),
-            Err(_) => return WriteResult::TooLong, // Can definitely happen.
+            Err(_) => return Err(TooLong), // Can definitely happen.
         }
 
         match cobs.finalize() {
@@ -320,12 +330,12 @@ impl Writer {
                     // Add COBS sentinel marker.
                     buf[len] = COBS_MARKER;
                     buf.resize_default(len + 1).unwrap();
-                    WriteResult::FrameOK(Frame(buf))
+                    Ok(Frame(buf))
                 } else {
-                    WriteResult::TooLong
+                    Err(TooLong)
                 }
             }
-            Err(_) => WriteResult::TooLong,
+            Err(_) => Err(TooLong),
         }
     }
 }

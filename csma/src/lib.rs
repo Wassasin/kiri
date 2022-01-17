@@ -9,24 +9,35 @@ use rand::{
     RngCore,
 };
 
+pub enum ReadError<E> {
+    /// An unrecoverable underlying error.
+    UnderlyingError(E),
+
+    /// Error to denote that a broken frame has been received.
+    ///
+    /// Examples including framing errors, parity errors, timing errors etc.
+    /// Map your internal errors to this if you want CSMA to work with them.
+    FrameError,
+}
+
+impl<E> From<E> for ReadError<E> {
+    fn from(e: E) -> Self {
+        ReadError::UnderlyingError(e)
+    }
+}
+
 pub trait Transceiver {
     type Error;
 
     /// Whether the bus is currently idle. Some USART peripherals have a separate register to indicate this.
     fn bus_is_idle(&self) -> bool;
 
-    /// Whether an error is detected on the bus, for example parity, framing or timing issues.
-    ///
-    /// This error must indicate that the sequence of bytes received is faulty.
-    /// If the peripheral does not have this feature it is OK to always return `false`.
-    fn bus_has_error(&self) -> bool;
-
     /// Write a byte on the bus.
     ///    /// Must yield `Ok` when completed.
-    fn write(&self, byte: u8) -> nb::Result<(), Self::Error>;
+    fn write(&mut self, byte: u8) -> nb::Result<(), Self::Error>;
 
     /// Read a byte from the bus, if available.
-    fn read(&self) -> nb::Result<u8, Self::Error>;
+    fn read(&mut self) -> nb::Result<u8, ReadError<Self::Error>>;
 }
 
 pub trait Clock {
@@ -86,7 +97,7 @@ impl<T: Transceiver> GreedyStrategy<T> {
         }
     }
 
-    pub fn send(&self, frame: &mut GreedyFrameInProgress) -> nb::Result<(), T::Error> {
+    pub fn send(&mut self, frame: &mut GreedyFrameInProgress) -> nb::Result<(), T::Error> {
         // Note should be send_or_receive for CSMA.
         let b = match frame.first() {
             None => return nb::Result::Ok(()),
@@ -105,7 +116,7 @@ impl<T: Transceiver> GreedyStrategy<T> {
         }
     }
 
-    pub fn receive(&mut self) -> nb::Result<FrameRef<'_>, T::Error> {
+    pub fn receive(&mut self) -> nb::Result<FrameRef<'_>, ReadError<T::Error>> {
         let b = self.transceiver.read()?;
         match self.reader.feed(b) {
             ReadResult::FrameOK(fr) => Ok(fr),
@@ -132,7 +143,6 @@ pub enum CsmaStrategyState<C: Clock> {
 }
 
 /// Carrier Sense Multiple Access strategy implementation.
-#[derive(Debug)]
 pub struct CsmaStrategy<'a, T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> {
     transceiver: T,
     clock: &'a C,
@@ -259,25 +269,9 @@ impl<'a, T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<'a,
     ) -> nb::Result<SendReceiveResult, T::Error> {
         use CsmaStrategyState::*;
 
-        // Handle if there is an error on the bus.
-        if self.transceiver.bus_has_error() {
-            // Throw away any waiting bytes.
-            let _ = self.transceiver.read();
-
-            // Reset the current sending frame so that it is resent.
-            frame.reset();
-
-            // Forget the current incoming frame.
-            self.reader.clear();
-
-            // Wait for the error to clear and the bus to be reset again.
-            self.state = WaitForBusIdle;
-            return nb::Result::Err(nb::Error::WouldBlock);
-        }
-
         // Handle incoming bytes during our sending process.
-        if let Ok(b) = self.transceiver.read() {
-            match &self.state {
+        match self.transceiver.read() {
+            Ok(b) => match &self.state {
                 Sending | ConfirmingSendWithoutErrors => {
                     // Frame must correspond with the frame we are trying to send.
                     match frame.feed_as_check(b) {
@@ -318,6 +312,23 @@ impl<'a, T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<'a,
                         ));
                     }
                 }
+            },
+            Err(nb::Error::WouldBlock) => {
+                // Do nothing, proceed to handle_send.
+            }
+            Err(nb::Error::Other(ReadError::FrameError)) => {
+                // Reset the current sending frame so that it is resent.
+                frame.reset();
+
+                // Forget the current incoming frame.
+                self.reader.clear();
+
+                // Wait for the error to clear and the bus to be reset again.
+                self.state = WaitForBusIdle;
+                return nb::Result::Err(nb::Error::WouldBlock);
+            }
+            Err(nb::Error::Other(ReadError::UnderlyingError(e))) => {
+                return nb::Result::Err(nb::Error::Other(e))
             }
         }
 
@@ -325,23 +336,30 @@ impl<'a, T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<'a,
     }
 
     pub fn receive(&mut self) -> nb::Result<FrameRef<'_>, T::Error> {
-        // Handle if there is an error on the bus.
-        if self.transceiver.bus_has_error() {
-            // Throw away any waiting bytes.
-            let _ = self.transceiver.read();
+        match self.transceiver.read() {
+            Ok(b) => match self.reader.feed(b) {
+                ReadResult::FrameOK(fr) => Ok(fr),
+                _ => nb::Result::Err(nb::Error::WouldBlock),
+            },
+            Err(nb::Error::Other(ReadError::FrameError)) => {
+                // Forget the current incoming frame.
+                self.reader.clear();
 
-            // Forget the current incoming frame.
-            self.reader.clear();
-
-            // Wait for the error to clear and the bus to be reset again.
-            return nb::Result::Err(nb::Error::WouldBlock);
+                // Wait for the error to clear and the bus to be reset again.
+                nb::Result::Err(nb::Error::WouldBlock)
+            }
+            Err(nb::Error::Other(ReadError::UnderlyingError(e))) => {
+                nb::Result::Err(nb::Error::Other(e))
+            }
+            Err(nb::Error::WouldBlock) => nb::Result::Err(nb::Error::WouldBlock),
         }
+    }
+}
 
-        let b = self.transceiver.read()?;
-
-        match self.reader.feed(b) {
-            ReadResult::FrameOK(fr) => Ok(fr),
-            _ => nb::Result::Err(nb::Error::WouldBlock),
-        }
+impl<'a, T: Transceiver, C: Clock + Debug, R: RngCore, CONF: Config<C>> core::fmt::Debug
+    for CsmaStrategy<'a, T, C, R, CONF>
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.state.fmt(f)
     }
 }
