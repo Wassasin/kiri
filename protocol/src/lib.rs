@@ -13,10 +13,10 @@ const MAGIC_LEN: usize = 2;
 const MAGIC_WORD: &[u8; 2] = b"kI";
 
 /// How much bytes the header uses up.
-pub const HEADER_LEN: usize = 4;
+pub const HEADER_LEN: usize = 10;
 
 /// How long a message in the frame can be at most, chosen such that `MAX_FRAME_LEN` is at most `1024`.
-pub const MAX_MESSAGE_LEN: usize = 1006;
+pub const MAX_MESSAGE_LEN: usize = 1000;
 
 /// How much bytes the contents of a frame, without COBS encoding, is taking up at most.
 pub const MAX_NAKED_LEN: usize = MAGIC_LEN + HEADER_LEN + MAX_MESSAGE_LEN + CHECKSUM_LEN;
@@ -32,52 +32,70 @@ const fn cobs_max_encoding_length(source_len: usize) -> usize {
     source_len + (source_len / 254) + if source_len % 254 > 0 { 1 } else { 0 }
 }
 
-#[derive(PackedStruct, Debug, PartialEq, Clone, Copy)]
+#[derive(PackedStruct, PartialEq, Clone, Copy)]
 #[packed_struct(bit_numbering = "msb0", endian = "msb")]
 pub struct Address {
-    #[packed_field(bits = "6..16")]
-    inner: Integer<u16, packed_bits::Bits<10>>,
+    #[packed_field(bits = "0..32")]
+    inner: Integer<u32, packed_bits::Bits<32>>,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct AddressTooLargeError;
 
-const ADDRESS_UNICAST: u16 = 0x3FF;
+const ADDRESS_MULTICAST: u32 = 0xFFFFFFFF;
 
 impl Address {
-    pub fn new(addr: u16) -> Result<Self, AddressTooLargeError> {
-        let inner = convert_primitive(addr).map_err(|_| AddressTooLargeError)?;
-        Ok(Self { inner })
+    pub fn new(addr: u32) -> Self {
+        Self {
+            inner: Integer::from_primitive(addr),
+        }
     }
 
-    pub fn unicast() -> Address {
-        Self::new(ADDRESS_UNICAST).unwrap()
+    pub fn multicast() -> Address {
+        Self::new(ADDRESS_MULTICAST)
     }
 
-    pub fn is_unicast(&self) -> bool {
-        self == &Self::unicast()
+    pub fn is_multicast(&self) -> bool {
+        self == &Self::multicast()
     }
 
-    pub fn to_primitive(&self) -> u16 {
+    pub fn to_primitive(&self) -> u32 {
         self.inner.to_primitive()
+    }
+
+    pub fn from_hex_str(str: &str) -> Result<Self, ()> {
+        let mut buf = [0u8; 4];
+        hex::decode_to_slice(str, &mut buf).map_err(|_| ())?;
+        Ok(Address::new(u32::from_be_bytes(buf)))
+    }
+}
+
+impl core::fmt::Display for Address {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut buf = [0u8; 8];
+        hex::encode_to_slice(self.to_primitive().to_be_bytes(), &mut buf).unwrap();
+        let str = unsafe { core::str::from_utf8_unchecked(&buf) };
+        f.write_str(str)
+    }
+}
+
+impl core::fmt::Debug for Address {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_fmt(format_args!("Address({})", self))
     }
 }
 
 #[derive(PackedStruct, Debug, PartialEq, Clone)]
-#[packed_struct(bit_numbering = "msb0", endian = "msb", size_bytes = 4)]
+#[packed_struct(bit_numbering = "msb0", endian = "msb", size_bytes = 10)]
 pub struct Header {
-    #[packed_field(bits = "0..10")]
+    #[packed_field(bits = "0..32")]
     pub address_src: Address,
-    #[packed_field(bits = "10..20")]
+    #[packed_field(bits = "32..64")]
     pub address_dst: Address,
-    #[packed_field(bits = "20..30")]
+    #[packed_field(bits = "64..74")]
     pub len: Integer<u16, packed_bits::Bits<10>>,
-    // #[packed_field(bits = "30..33")]
-    // _seq: Integer<u8, packed_bits::Bits<3>>,
-    // #[packed_field(bits = "33..36")]
-    // _ack: Integer<u8, packed_bits::Bits<3>>,
-    #[packed_field(bits = "30..32")]
-    _reserved: Integer<u8, packed_bits::Bits<2>>,
+    #[packed_field(bits = "74..80")]
+    _reserved: Integer<u8, packed_bits::Bits<6>>,
 }
 
 /// A reference to a decoded frame, owned by the Reader.

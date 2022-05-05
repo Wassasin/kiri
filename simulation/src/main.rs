@@ -1,4 +1,3 @@
-use log;
 use rand::prelude::ThreadRng;
 use serde_derive::{Deserialize, Serialize};
 use std::{collections::HashSet, rc::Rc};
@@ -14,9 +13,9 @@ mod simulation;
 #[derive(Debug)]
 pub struct BusConf;
 
-impl kiri_csma::Config<FakeClock> for BusConf {
-    const BUS_MIN_IDLE_DURATION: <FakeClock as Clock>::Duration = FakeDuration(1);
-    const BUS_MAX_IDLE_DURATION: <FakeClock as Clock>::Duration = FakeDuration(32);
+impl<'a> kiri_csma::Config<&'a FakeClock> for BusConf {
+    const BUS_MIN_IDLE_DURATION: <&'a FakeClock as Clock>::Duration = FakeDuration(1);
+    const BUS_MAX_IDLE_DURATION: <&'a FakeClock as Clock>::Duration = FakeDuration(32);
 }
 
 pub struct Mailbox {
@@ -46,7 +45,7 @@ impl Mailbox {
             if dst >= addr {
                 dst += 1;
             }
-            let dst = Address::new(dst as u16).unwrap();
+            let dst = Address::new(dst as u32);
             let message = Message {
                 src: src.to_primitive(),
                 dst: dst.to_primitive(),
@@ -117,14 +116,14 @@ impl Mailbox {
 
 pub struct Party<'a> {
     address: Address,
-    strategy: CsmaStrategy<'a, SerialTransceiver, FakeClock, ThreadRng, BusConf>,
+    strategy: CsmaStrategy<SerialTransceiver, &'a FakeClock, ThreadRng, BusConf>,
     current_frame: Option<CsmaFrameInProgress>,
 }
 
 impl<'a> Party<'a> {
     pub fn new(
         address: Address,
-        strategy: CsmaStrategy<'a, SerialTransceiver, FakeClock, ThreadRng, BusConf>,
+        strategy: CsmaStrategy<SerialTransceiver, &'a FakeClock, ThreadRng, BusConf>,
     ) -> Self {
         Self {
             address,
@@ -169,8 +168,8 @@ impl<'a> Party<'a> {
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub struct Message {
-    src: u16,
-    dst: u16,
+    src: u32,
+    dst: u32,
     identifier: usize,
 }
 
@@ -200,10 +199,10 @@ fn main() {
     parties.reserve(party_count);
 
     for i in 0..party_count {
-        let address = Address::new(i as u16).unwrap();
+        let address = Address::new(i as u32);
         let transceiver = SerialTransceiver::new(bus.clone());
         let strategy =
-            CsmaStrategy::<_, _, _, BusConf>::new(transceiver, &clock, rand::thread_rng());
+            CsmaStrategy::<_, _, _, BusConf>::new(transceiver, clock.as_ref(), rand::thread_rng());
         parties.push(Party::new(address, strategy));
     }
 
@@ -226,7 +225,7 @@ fn main() {
         }
     }
 
-    log::info!("Done in {:?}", clock.now());
+    log::info!("Done in {:?}", clock.as_ref().now());
 
     mailbox.report();
 }

@@ -109,6 +109,8 @@ impl Transceiver for SerialTransceiver {
             }
         }
     }
+
+    fn handle_interrupts(&self) {}
 }
 
 impl Debug for SerialTransceiver {

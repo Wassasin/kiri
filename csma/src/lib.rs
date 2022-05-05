@@ -1,6 +1,10 @@
 #![no_std]
 
-use core::{fmt::Debug, marker::PhantomData, ops::Add};
+use core::{
+    fmt::Debug,
+    marker::PhantomData,
+    ops::{Add, Sub},
+};
 
 use kiri_protocol::{Frame, FrameOwned, FrameRef, ReadResult, Reader};
 use rand::{
@@ -29,6 +33,9 @@ impl<E> From<E> for ReadError<E> {
 pub trait Transceiver {
     type Error;
 
+    /// Perform maintance operations on interrupts, i.e. clearing them after reading.
+    fn handle_interrupts(&self);
+
     /// Whether the bus is currently idle. Some USART peripherals have a separate register to indicate this.
     fn bus_is_idle(&self) -> bool;
 
@@ -44,10 +51,11 @@ pub trait Clock {
     type Instant: PartialEq
         + PartialOrd
         + Add<Self::Duration, Output = Self::Instant>
+        + Sub<Self::Instant, Output = Self::Duration>
         + Debug
         + Clone
         + Copy;
-    type Duration: PartialEq + SampleUniform;
+    type Duration: PartialEq + PartialOrd + SampleUniform;
 
     fn now(&self) -> Self::Instant;
 }
@@ -143,9 +151,9 @@ pub enum CsmaStrategyState<C: Clock> {
 }
 
 /// Carrier Sense Multiple Access strategy implementation.
-pub struct CsmaStrategy<'a, T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> {
+pub struct CsmaStrategy<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> {
     transceiver: T,
-    clock: &'a C,
+    clock: C,
     rng: R,
     reader: Reader,
     state: CsmaStrategyState<C>,
@@ -197,8 +205,8 @@ pub enum SendReceiveResult {
     Received(FrameOwned),
 }
 
-impl<'a, T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<'a, T, C, R, CONF> {
-    pub fn new(transceiver: T, clock: &'a C, rng: R) -> Self {
+impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R, CONF> {
+    pub fn new(transceiver: T, clock: C, rng: R) -> Self {
         Self {
             transceiver,
             clock,
@@ -269,6 +277,8 @@ impl<'a, T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<'a,
     ) -> nb::Result<SendReceiveResult, T::Error> {
         use CsmaStrategyState::*;
 
+        self.transceiver.handle_interrupts();
+
         // Handle incoming bytes during our sending process.
         match self.transceiver.read() {
             Ok(b) => match &self.state {
@@ -336,6 +346,8 @@ impl<'a, T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<'a,
     }
 
     pub fn receive(&mut self) -> nb::Result<FrameRef<'_>, T::Error> {
+        self.transceiver.handle_interrupts();
+
         match self.transceiver.read() {
             Ok(b) => match self.reader.feed(b) {
                 ReadResult::FrameOK(fr) => Ok(fr),
@@ -354,10 +366,14 @@ impl<'a, T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<'a,
             Err(nb::Error::WouldBlock) => nb::Result::Err(nb::Error::WouldBlock),
         }
     }
+
+    pub fn now(&self) -> C::Instant {
+        self.clock.now()
+    }
 }
 
-impl<'a, T: Transceiver, C: Clock + Debug, R: RngCore, CONF: Config<C>> core::fmt::Debug
-    for CsmaStrategy<'a, T, C, R, CONF>
+impl<T: Transceiver, C: Clock + Debug, R: RngCore, CONF: Config<C>> core::fmt::Debug
+    for CsmaStrategy<T, C, R, CONF>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.state.fmt(f)

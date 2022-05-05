@@ -1,5 +1,5 @@
 use std::{
-    ops::Add,
+    ops::{Add, Sub},
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -29,7 +29,7 @@ impl FakeClock {
     }
 }
 
-impl Clock for FakeClock {
+impl Clock for &FakeClock {
     type Instant = FakeInstant;
     type Duration = FakeDuration;
 
@@ -43,6 +43,14 @@ impl Add<FakeDuration> for FakeInstant {
 
     fn add(self, rhs: FakeDuration) -> Self::Output {
         FakeInstant(self.0 + rhs.0)
+    }
+}
+
+impl Sub<FakeInstant> for FakeInstant {
+    type Output = FakeDuration;
+
+    fn sub(self, rhs: FakeInstant) -> Self::Output {
+        FakeDuration(self.0 - rhs.0)
     }
 }
 
