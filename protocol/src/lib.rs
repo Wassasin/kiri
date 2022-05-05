@@ -5,8 +5,9 @@ use packed_struct::{prelude::*, types::Integer};
 
 use crc::{Crc, CRC_16_IBM_SDLC};
 
+pub const CHECKSUM: Crc<u16> = Crc::<u16>::new(&CRC_16_IBM_SDLC);
+
 const COBS_MARKER: u8 = 0;
-const CHECKSUM: Crc<u16> = Crc::<u16>::new(&CRC_16_IBM_SDLC);
 const CHECKSUM_LEN: usize = 2;
 
 const MAGIC_LEN: usize = 2;
@@ -82,6 +83,12 @@ impl core::fmt::Display for Address {
 impl core::fmt::Debug for Address {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_fmt(format_args!("Address({})", self))
+    }
+}
+
+impl defmt::Format for Address {
+    fn format(&self, fmt: defmt::Formatter) {
+        defmt::write!(fmt, "Address({=u32:08X})", self.to_primitive())
     }
 }
 
