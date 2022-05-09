@@ -9,3 +9,5 @@ rand = { version = "0.8", default-features = false }
 heapless = "0.7"
 
 kiri-protocol = { path = "../protocol" }
+
+defmt = "0.3"
