@@ -150,6 +150,11 @@ pub enum CsmaStrategyState<C: Clock> {
     ConfirmingSendWithoutErrors,
 }
 
+#[derive(Default)]
+pub struct Stats {
+    pub frame_errors: u64,
+}
+
 /// Carrier Sense Multiple Access strategy implementation.
 pub struct CsmaStrategy<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> {
     transceiver: T,
@@ -157,6 +162,7 @@ pub struct CsmaStrategy<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> {
     rng: R,
     reader: Reader,
     state: CsmaStrategyState<C>,
+    stats: Stats,
     _conf: PhantomData<CONF>,
 }
 
@@ -213,8 +219,13 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
             rng,
             reader: Reader::new(),
             state: CsmaStrategyState::WaitForBusIdle,
+            stats: Stats::default(),
             _conf: PhantomData::default(),
         }
+    }
+
+    pub fn stats(&self) -> &Stats {
+        &self.stats
     }
 
     /// Handle sending of bytes on bus, if the bus is clear.
@@ -295,6 +306,7 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
                         Err(_) => {
                             // Mismatch between sending and loopback frames.
                             defmt::trace!("Frame error");
+                            self.stats.frame_errors += 1;
 
                             // Reset the current sending frame so that it is resent.
                             frame.reset();
@@ -332,6 +344,7 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
             }
             Err(nb::Error::Other(ReadError::FrameError)) => {
                 defmt::trace!("Frame error");
+                self.stats.frame_errors += 1;
 
                 // Reset the current sending frame so that it is resent.
                 frame.reset();
@@ -360,6 +373,8 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
                 _ => nb::Result::Err(nb::Error::WouldBlock),
             },
             Err(nb::Error::Other(ReadError::FrameError)) => {
+                self.stats.frame_errors += 1;
+
                 // Forget the current incoming frame.
                 self.reader.clear();
 
