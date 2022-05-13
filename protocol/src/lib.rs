@@ -1,6 +1,7 @@
 #![no_std]
 
 use core::fmt::Debug;
+use defmt::Format;
 use packed_struct::{prelude::*, types::Integer};
 
 use crc::{Crc, CRC_16_IBM_SDLC};
@@ -288,8 +289,7 @@ impl Frame {
     }
 }
 
-#[derive(Debug)]
-#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Format)]
 pub enum WriteError {
     /// Tried to write a message that will not fit within a frame.
     TooLong,
