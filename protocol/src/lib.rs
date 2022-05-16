@@ -1,7 +1,6 @@
 #![no_std]
 
 use core::fmt::Debug;
-use defmt::Format;
 use packed_struct::{prelude::*, types::Integer};
 
 use crc::{Crc, CRC_16_IBM_SDLC};
@@ -87,6 +86,7 @@ impl core::fmt::Debug for Address {
     }
 }
 
+#[cfg(feature = "defmt")]
 impl defmt::Format for Address {
     fn format(&self, fmt: defmt::Formatter) {
         defmt::write!(fmt, "Address({=u32:08X})", self.to_primitive())
@@ -289,7 +289,8 @@ impl Frame {
     }
 }
 
-#[derive(Debug, Format)]
+#[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum WriteError {
     /// Tried to write a message that will not fit within a frame.
     TooLong,
@@ -388,16 +389,12 @@ mod tests {
     use alloc::vec;
 
     const MSG: &[u8] = b"\0loremipsum\0";
-    const ADDR_A: u16 = 13;
-    const ADDR_B: u16 = 169;
+    const ADDR_A: u32 = 0x0f004242;
+    const ADDR_B: u32 = 0x00012003;
 
     fn fill_frame(result: &mut [u8]) -> &mut [u8] {
-        let frame = match Writer::package(
-            Address::new(ADDR_A).unwrap(),
-            Address::new(ADDR_B).unwrap(),
-            MSG,
-        ) {
-            WriteResult::FrameOK(frame) => frame,
+        let frame = match Writer::package(Address::new(ADDR_A), Address::new(ADDR_B), MSG) {
+            Ok(frame) => frame,
             e => panic!("Invalid result {:?}", e),
         };
 
@@ -409,13 +406,16 @@ mod tests {
     #[test]
     fn unchanged_header() {
         let header = Header {
-            address_src: Address::new(13).unwrap(),
-            address_dst: Address::new(1023).unwrap(),
+            address_src: Address::new(ADDR_A),
+            address_dst: Address::new(ADDR_B),
             len: Integer::from_primitive(800),
             _reserved: Integer::from_primitive(0),
         };
 
-        assert_eq!(vec![3, 127, 252, 128], header.pack().unwrap());
+        assert_eq!(
+            vec![15, 0, 66, 66, 0, 1, 32, 3, 200, 0],
+            header.pack().unwrap()
+        );
         assert_eq!(Header::unpack(&header.pack().unwrap()).unwrap(), header);
     }
 
@@ -438,8 +438,8 @@ mod tests {
             e => panic!("Invalid result {:?}", e),
         };
 
-        assert_eq!(frame.header.address_src, Address::new(ADDR_A).unwrap());
-        assert_eq!(frame.header.address_dst, Address::new(ADDR_B).unwrap());
+        assert_eq!(frame.header.address_src, Address::new(ADDR_A));
+        assert_eq!(frame.header.address_dst, Address::new(ADDR_B));
         assert_eq!(frame.contents, MSG);
     }
 

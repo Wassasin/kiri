@@ -1,5 +1,7 @@
 #![no_std]
 
+pub(crate) mod fmt;
+
 use core::{
     fmt::Debug,
     marker::PhantomData,
@@ -294,7 +296,7 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
         match self.transceiver.read() {
             Ok(b) => match &self.state {
                 Sending | ConfirmingSendWithoutErrors => {
-                    defmt::trace!("Received(S) {}", b);
+                    trace!("Received(S) {}", b);
 
                     // Frame must correspond with the frame we are trying to send.
                     match frame.feed_as_check(b) {
@@ -305,7 +307,7 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
                         Ok(false) => (), // Continue with sending.
                         Err(_) => {
                             // Mismatch between sending and loopback frames.
-                            defmt::trace!("Frame error");
+                            trace!("Frame error");
                             self.stats.frame_errors += 1;
 
                             // Reset the current sending frame so that it is resent.
@@ -324,7 +326,7 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
                     }
                 }
                 _ => {
-                    defmt::trace!("Received(R) {}", b);
+                    trace!("Received(R) {}", b);
                     self.state = WaitForBusIdle;
 
                     // The byte that we received is part of a valid frame.
@@ -333,7 +335,7 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
                         // If so, this indicates that the transceiver has succesfully sent our frame.
 
                         // The frame is not sent by us, and thus should be reported back to our caller.
-                        return Ok(SendReceiveResult::Received(defmt::unwrap!(
+                        return Ok(SendReceiveResult::Received(unwrap!(
                             incoming_frame.try_into()
                         )));
                     }
@@ -343,7 +345,7 @@ impl<T: Transceiver, C: Clock, R: RngCore, CONF: Config<C>> CsmaStrategy<T, C, R
                 // Do nothing, proceed to handle_send.
             }
             Err(nb::Error::Other(ReadError::FrameError)) => {
-                defmt::trace!("Frame error");
+                trace!("Frame error");
                 self.stats.frame_errors += 1;
 
                 // Reset the current sending frame so that it is resent.
